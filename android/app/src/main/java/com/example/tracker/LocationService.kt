@@ -29,10 +29,9 @@ class LocationService : Service(), LocationListener {
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val p = getSharedPreferences("cfg", MODE_PRIVATE)
-        url = p.getString("url", "")!!.trimEnd('/') + "/api/location"
-        token = p.getString("token", "")!!
-        deviceId = p.getString("id", "")!!
+        url = Config.SERVER_URL.trimEnd('/') + "/api/location"
+        token = Config.DEVICE_KEY
+        deviceId = Config.deviceId(this)
 
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("loc", "Partage de position", NotificationManager.IMPORTANCE_LOW))
@@ -45,6 +44,10 @@ class LocationService : Service(), LocationListener {
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
             if (lm.isProviderEnabled(prov)) lm.requestLocationUpdates(prov, 5000L, 0f, this)
+        }
+        // Envoi immédiat de la dernière position connue : l'appareil apparaît tout de suite sur la carte.
+        for (prov in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+            lm.getLastKnownLocation(prov)?.let { l -> io.execute { send(l) } }
         }
         status = "En attente d'un fix GPS…"
         return START_STICKY
@@ -73,7 +76,7 @@ class LocationService : Service(), LocationListener {
     }
 
     override fun onDestroy() {
-        lm.removeUpdates(this)
+        if (::lm.isInitialized) lm.removeUpdates(this)
         io.shutdown()
         status = "Arrêté"
     }

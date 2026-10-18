@@ -4,6 +4,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const TOKEN = process.env.TOKEN || 'dev';
+const DEVICE_KEY = process.env.DEVICE_KEY || 'mvp-device-key'; // clé d'envoi embarquée dans l'APK (sans accès admin)
 const PORT = process.env.PORT || 3000;
 const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
 const devices = {}; // id -> {id, lat, lng, acc, speed, ts, received}
@@ -70,7 +71,7 @@ http.createServer((req, res) => {
     return d ? json(res, { id: d.id, lat: d.lat, lng: d.lng, acc: d.acc, received: d.received }) : json(res, {}, 404);
   }
   if (req.method === 'POST' && p === '/api/location') {
-    if (req.headers.authorization !== 'Bearer ' + TOKEN) { res.writeHead(401); return res.end(); }
+    if (![TOKEN, DEVICE_KEY].some(k => req.headers.authorization === 'Bearer ' + k)) { res.writeHead(401); return res.end(); }
     let body = '';
     req.on('data', c => { body += c; if (body.length > 4096) req.destroy(); });
     req.on('end', () => {

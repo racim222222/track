@@ -4,62 +4,63 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.TextView
-import java.util.UUID
 
+/** Aucun champ : à l'ouverture, enchaîne les autorisations puis démarre le suivi tout seul. */
 class MainActivity : Activity() {
-    private lateinit var url: EditText
-    private lateinit var token: EditText
-    private lateinit var devId: EditText
     private lateinit var status: TextView
     private val ui = Handler(Looper.getMainLooper())
     private val refresh = object : Runnable {
         override fun run() { status.text = LocationService.status; ui.postDelayed(this, 1000) }
     }
+    private var askedFine = false
+    private var askedBg = false
+    private var askedBattery = false
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
-        val p = getSharedPreferences("cfg", MODE_PRIVATE)
-        fun field(hint: String, v: String) = EditText(this).apply { this.hint = hint; setText(v); setSingleLine() }
-        url = field("URL serveur (http://IP:3000)", p.getString("url", "http://10.0.2.2:3000")!!)
-        token = field("Token", p.getString("token", "dev")!!)
-        devId = field("Id appareil", p.getString("id", null) ?: UUID.randomUUID().toString().take(8))
-        status = TextView(this).apply { textSize = 16f }
-        val start = Button(this).apply { text = "Démarrer"; setOnClickListener { ensurePermsThenStart() } }
-        val stop = Button(this).apply { text = "Arrêter"; setOnClickListener { stopService(Intent(this@MainActivity, LocationService::class.java)) } }
-        setContentView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32)
-            listOf<android.view.View>(url, token, devId, start, stop, status).forEach { addView(it) }
-        })
+        status = TextView(this).apply { textSize = 18f; setPadding(48, 96, 48, 48) }
+        setContentView(status)
     }
 
-    override fun onResume() { super.onResume(); ui.post(refresh) }
+    override fun onResume() { super.onResume(); ui.post(refresh); proceed() }
     override fun onPause() { super.onPause(); ui.removeCallbacks(refresh) }
 
-    private fun ensurePermsThenStart() {
-        val need = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 33) need += Manifest.permission.POST_NOTIFICATIONS
-        val missing = need.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isEmpty()) start() else requestPermissions(missing.toTypedArray(), 1)
+    private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+
+    private fun proceed() {
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            if (askedFine) { LocationService.status = "Localisation refusée : Réglages > Applis > Tracker > Autorisations"; return }
+            askedFine = true
+            val need = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (Build.VERSION.SDK_INT >= 33) need += Manifest.permission.POST_NOTIFICATIONS
+            requestPermissions(need.toTypedArray(), 1)
+            return
+        }
+        // Dès que la position est autorisée, le suivi démarre (l'appareil apparaît sur la carte).
+        Config.setEnabled(this, true)
+        try { startForegroundService(Intent(this, LocationService::class.java)) } catch (e: Exception) { LocationService.status = "Démarrage impossible : ${e.message}" }
+
+        // « Toujours autoriser » : Android impose une demande séparée (ouvre l'écran de réglages dès Android 11).
+        if (Build.VERSION.SDK_INT >= 29 && !granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) && !askedBg) {
+            askedBg = true
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), 2)
+            return
+        }
+        // Évite que le système tue le service en arrière-plan.
+        val pm = getSystemService(PowerManager::class.java)
+        if (!pm.isIgnoringBatteryOptimizations(packageName) && !askedBattery) {
+            askedBattery = true
+            try { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) } catch (_: Exception) {}
+        }
     }
 
-    override fun onRequestPermissionsResult(rc: Int, perms: Array<String>, res: IntArray) {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) start()
-        else LocationService.status = "Permission localisation refusée"
-    }
-
-    private fun start() {
-        getSharedPreferences("cfg", MODE_PRIVATE).edit()
-            .putString("url", url.text.toString().trim()).putString("token", token.text.toString().trim())
-            .putString("id", devId.text.toString().trim()).apply()
-        // Doit être lancé depuis l'app au premier plan (Android 12+ interdit le départ d'un FGS location en arrière-plan)
-        startForegroundService(Intent(this, LocationService::class.java))
-    }
+    override fun onRequestPermissionsResult(rc: Int, perms: Array<String>, res: IntArray) = proceed()
 }
