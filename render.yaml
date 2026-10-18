@@ -1,0 +1,12 @@
+# Déploiement 1 clic sur Render (gratuit, HTTPS, toujours en ligne) : Dashboard > New > Blueprint > ce repo
+services:
+  - type: web
+    name: tracker
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: "true"
+    startCommand: node server.js
+    envVars:
+      - key: TOKEN
+        generateValue: true
